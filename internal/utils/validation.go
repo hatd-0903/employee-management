@@ -20,7 +20,7 @@ func ValidateCreateEmployee(req models.CreateEmployeeRequest) *models.AppError {
 	if req.DepartmentID <= 0 {
 		return models.ErrValidation("departmentId is required")
 	}
-	if req.Salary <= 0 {
+	if !isPositiveSalary(req.Salary) {
 		return models.ErrValidation("salary must be greater than 0")
 	}
 	return nil
@@ -42,10 +42,21 @@ func ValidateUpdateEmployee(req models.UpdateEmployeeRequest) *models.AppError {
 	if req.DepartmentID != nil && *req.DepartmentID <= 0 {
 		return models.ErrValidation("departmentId must be valid")
 	}
-	if req.Salary != nil && *req.Salary <= 0 {
+	if req.Salary != nil && !isPositiveSalary(*req.Salary) {
 		return models.ErrValidation("salary must be greater than 0")
 	}
 	return nil
+}
+
+// isPositiveSalary parses the json.Number text only to check its sign; the
+// original decimal text is what actually gets persisted, so this never
+// feeds back into stored or returned values.
+func isPositiveSalary(s models.Salary) bool {
+	value, err := s.Float64()
+	if err != nil {
+		return false
+	}
+	return value > 0
 }
 
 func ValidateCreateDepartment(req models.CreateDepartmentRequest) *models.AppError {

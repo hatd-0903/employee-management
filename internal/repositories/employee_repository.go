@@ -225,16 +225,28 @@ func (r *mysqlEmployeeRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *mysqlEmployeeRepository) Search(ctx context.Context, keyword string) ([]*models.Employee, error) {
-	like := "%" + keyword + "%"
-	rows, err := r.db.QueryContext(ctx, `
+func (r *mysqlEmployeeRepository) Search(ctx context.Context, keyword string, filter models.EmployeeListFilter) ([]*models.Employee, int, error) {
+	like := likePattern(keyword)
+	where := "WHERE deleted_at IS NULL AND (name LIKE ? ESCAPE '\\\\' OR position LIKE ? ESCAPE '\\\\')"
+	args := []any{like, like}
+
+	var total int
+	countQuery := "SELECT COUNT(*) FROM employees " + where
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count search results: %w", err)
+	}
+
+	listQuery := fmt.Sprintf(`
 		SELECT id, name, age, position, department_id, salary, created_at, updated_at
-		FROM employees
-		WHERE deleted_at IS NULL AND (name LIKE ? OR position LIKE ?)
+		FROM employees %s
 		ORDER BY id ASC
-	`, like, like)
+		LIMIT ? OFFSET ?
+	`, where)
+	listArgs := append(append([]any{}, args...), filter.Limit, filter.Offset)
+
+	rows, err := r.db.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("search employees: %w", err)
+		return nil, 0, fmt.Errorf("search employees: %w", err)
 	}
 	defer rows.Close()
 
@@ -242,23 +254,39 @@ func (r *mysqlEmployeeRepository) Search(ctx context.Context, keyword string) ([
 	for rows.Next() {
 		var e models.Employee
 		if err := scanEmployee(rows, &e); err != nil {
-			return nil, fmt.Errorf("scan employee: %w", err)
+			return nil, 0, fmt.Errorf("scan employee: %w", err)
 		}
 		employees = append(employees, &e)
 	}
-	return employees, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate search results: %w", err)
+	}
+
+	return employees, total, nil
 }
 
-func (r *mysqlEmployeeRepository) ListByDepartment(ctx context.Context, departmentID int64) ([]*models.Employee, error) {
+func (r *mysqlEmployeeRepository) ListByDepartment(ctx context.Context, departmentID int64, filter models.EmployeeListFilter) ([]*models.Employee, int, error) {
+	var total int
+	countQuery := `
+		SELECT COUNT(*)
+		FROM employees e
+		INNER JOIN departments d ON d.id = e.department_id
+		WHERE d.id = ? AND e.deleted_at IS NULL
+	`
+	if err := r.db.QueryRowContext(ctx, countQuery, departmentID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count employees by department: %w", err)
+	}
+
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.id, e.name, e.age, e.position, e.department_id, e.salary, e.created_at, e.updated_at
 		FROM employees e
 		INNER JOIN departments d ON d.id = e.department_id
 		WHERE d.id = ? AND e.deleted_at IS NULL
 		ORDER BY e.id ASC
-	`, departmentID)
+		LIMIT ? OFFSET ?
+	`, departmentID, filter.Limit, filter.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("list employees by department: %w", err)
+		return nil, 0, fmt.Errorf("list employees by department: %w", err)
 	}
 	defer rows.Close()
 
@@ -266,11 +294,15 @@ func (r *mysqlEmployeeRepository) ListByDepartment(ctx context.Context, departme
 	for rows.Next() {
 		var e models.Employee
 		if err := scanEmployee(rows, &e); err != nil {
-			return nil, fmt.Errorf("scan employee: %w", err)
+			return nil, 0, fmt.Errorf("scan employee: %w", err)
 		}
 		employees = append(employees, &e)
 	}
-	return employees, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate employees by department: %w", err)
+	}
+
+	return employees, total, nil
 }
 
 // rowScanner abstracts over *sql.Row and *sql.Rows so scanEmployee works for both.
@@ -280,4 +312,13 @@ type rowScanner interface {
 
 func scanEmployee(row rowScanner, e *models.Employee) error {
 	return row.Scan(&e.ID, &e.Name, &e.Age, &e.Position, &e.DepartmentID, &e.Salary, &e.CreatedAt, &e.UpdatedAt)
+}
+
+// likeEscaper escapes LIKE's own wildcard characters (and the escape
+// character itself) so user-supplied keywords are matched literally instead
+// of being interpreted as % / _ patterns.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func likePattern(keyword string) string {
+	return "%" + likeEscaper.Replace(keyword) + "%"
 }

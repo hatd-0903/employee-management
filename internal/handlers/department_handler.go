@@ -48,10 +48,16 @@ func (h *DepartmentHandler) ListEmployees(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	employees, err := h.employees.ListByDepartment(r.Context(), id)
+	filter, appErr := utils.ParseEmployeeListFilter(r)
+	if appErr != nil {
+		writeError(w, appErr)
+		return
+	}
+
+	result, err := h.employees.ListByDepartment(r.Context(), id, filter)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"employees": employees})
+	writeJSON(w, http.StatusOK, result)
 }
