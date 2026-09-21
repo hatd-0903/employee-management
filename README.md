@@ -56,7 +56,7 @@ All endpoints except `GET /healthz` require HTTP Basic Auth.
 |---|---|---|
 | POST | `/employees` | Create an employee |
 | GET | `/employees?limit=&offset=&departmentId=` | Paginated list |
-| GET | `/employees/search?keyword=` | Search by name or position |
+| GET | `/employees/search?keyword=&limit=&offset=` | Paginated search by name or position |
 | GET | `/employees/{id}` | Get one employee |
 | PUT | `/employees/{id}` | Partial update |
 | DELETE | `/employees/{id}` | Soft delete |
@@ -86,7 +86,7 @@ curl -u admin:admin123 -X POST http://localhost:8080/employees/export
 |---|---|---|
 | POST | `/departments` | Create a department |
 | GET | `/departments` | List departments |
-| GET | `/departments/{id}/employees` | Employees in a department |
+| GET | `/departments/{id}/employees?limit=&offset=` | Paginated employees in a department |
 
 ```
 curl -u admin:admin123 -X POST http://localhost:8080/departments \
@@ -120,8 +120,18 @@ failures (500/504).
 - **Concurrency exercise**: `ExportService.ExportAll` fetches employees once,
   then writes the JSON and CSV files in two goroutines coordinated by a
   `sync.WaitGroup`; a `sync.Mutex` guards the shared error slice the
-  goroutines may both write to.
+  goroutines may both write to. Each file is written to a temp file in the
+  same directory and `os.Rename`d onto the final path (`writeFileAtomic` in
+  `export_service.go`), so overlapping `POST /employees/export` calls can't
+  interleave or truncate each other's output — a reader only ever sees a
+  complete old or new file.
 - **Routing**: Go 1.22's `net/http.ServeMux` method + `{id}` wildcard
   patterns are used directly — no third-party router. Go's mux picks the more
   specific literal pattern (`/employees/search`) over the wildcard one
   (`/employees/{id}`) automatically.
+- **Search and per-department listing are paginated like `GET /employees`**:
+  both go through the same `EmployeeListFilter`/`maxLimit` cap, so a request
+  can't force an unbounded table scan. `Search` also escapes `%`, `_` and `\`
+  in the keyword (`likePattern` in `employee_repository.go`) before building
+  the `LIKE` pattern, so those characters are matched literally instead of
+  being treated as wildcards.

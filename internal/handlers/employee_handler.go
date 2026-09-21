@@ -97,12 +97,17 @@ func (h *EmployeeHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EmployeeHandler) Search(w http.ResponseWriter, r *http.Request) {
+	filter, appErr := utils.ParseEmployeeListFilter(r)
+	if appErr != nil {
+		writeError(w, appErr)
+		return
+	}
 	keyword := r.URL.Query().Get("keyword")
 
-	employees, err := h.service.Search(r.Context(), keyword)
+	result, err := h.service.Search(r.Context(), keyword, filter)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"employees": employees})
+	writeJSON(w, http.StatusOK, result)
 }

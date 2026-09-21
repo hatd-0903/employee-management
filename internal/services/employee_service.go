@@ -89,7 +89,7 @@ func (s *EmployeeService) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *EmployeeService) Search(ctx context.Context, keyword string) ([]*models.Employee, error) {
+func (s *EmployeeService) Search(ctx context.Context, keyword string, filter models.EmployeeListFilter) (*models.EmployeeListResult, error) {
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" {
 		return nil, models.ErrValidation("keyword is required")
@@ -98,14 +98,14 @@ func (s *EmployeeService) Search(ctx context.Context, keyword string) ([]*models
 	ctx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 
-	employees, err := s.employees.Search(ctx, keyword)
+	employees, total, err := s.employees.Search(ctx, keyword, filter)
 	if err != nil {
 		return nil, utils.AsAppError(err)
 	}
-	return employees, nil
+	return &models.EmployeeListResult{TotalCount: total, Employees: employees}, nil
 }
 
-func (s *EmployeeService) ListByDepartment(ctx context.Context, departmentID int64) ([]*models.Employee, error) {
+func (s *EmployeeService) ListByDepartment(ctx context.Context, departmentID int64, filter models.EmployeeListFilter) (*models.EmployeeListResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbTimeout)
 	defer cancel()
 
@@ -113,9 +113,9 @@ func (s *EmployeeService) ListByDepartment(ctx context.Context, departmentID int
 		return nil, utils.AsAppError(err)
 	}
 
-	employees, err := s.employees.ListByDepartment(ctx, departmentID)
+	employees, total, err := s.employees.ListByDepartment(ctx, departmentID, filter)
 	if err != nil {
 		return nil, utils.AsAppError(err)
 	}
-	return employees, nil
+	return &models.EmployeeListResult{TotalCount: total, Employees: employees}, nil
 }

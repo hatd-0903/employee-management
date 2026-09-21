@@ -58,7 +58,7 @@ func (s *ExportService) ExportAll(ctx context.Context) (*ExportResult, error) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if err := writeEmployeesJSON(jsonPath, employees); err != nil {
+		if err := writeEmployeesJSON(s.outputDir, jsonPath, employees); err != nil {
 			mu.Lock()
 			errs = append(errs, fmt.Errorf("json export: %w", err))
 			mu.Unlock()
@@ -66,7 +66,7 @@ func (s *ExportService) ExportAll(ctx context.Context) (*ExportResult, error) {
 	}()
 	go func() {
 		defer wg.Done()
-		if err := writeEmployeesCSV(csvPath, employees); err != nil {
+		if err := writeEmployeesCSV(s.outputDir, csvPath, employees); err != nil {
 			mu.Lock()
 			errs = append(errs, fmt.Errorf("csv export: %w", err))
 			mu.Unlock()
@@ -81,47 +81,70 @@ func (s *ExportService) ExportAll(ctx context.Context) (*ExportResult, error) {
 	return &ExportResult{JSONPath: jsonPath, CSVPath: csvPath}, nil
 }
 
-func writeEmployeesJSON(path string, employees []*models.Employee) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(employees)
+func writeEmployeesJSON(dir, path string, employees []*models.Employee) error {
+	return writeFileAtomic(dir, path, func(f *os.File) error {
+		enc := json.NewEncoder(f)
+		enc.SetIndent("", "  ")
+		return enc.Encode(employees)
+	})
 }
 
-func writeEmployeesCSV(path string, employees []*models.Employee) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func writeEmployeesCSV(dir, path string, employees []*models.Employee) error {
+	return writeFileAtomic(dir, path, func(f *os.File) error {
+		w := csv.NewWriter(f)
 
-	w := csv.NewWriter(f)
-	defer w.Flush()
-
-	header := []string{"id", "name", "age", "position", "department_id", "salary", "created_at", "updated_at"}
-	if err := w.Write(header); err != nil {
-		return err
-	}
-
-	for _, e := range employees {
-		record := []string{
-			strconv.FormatInt(e.ID, 10),
-			e.Name,
-			strconv.Itoa(e.Age),
-			e.Position,
-			strconv.FormatInt(e.DepartmentID, 10),
-			strconv.FormatFloat(e.Salary, 'f', 2, 64),
-			e.CreatedAt.Format(time.RFC3339),
-			e.UpdatedAt.Format(time.RFC3339),
-		}
-		if err := w.Write(record); err != nil {
+		header := []string{"id", "name", "age", "position", "department_id", "salary", "created_at", "updated_at"}
+		if err := w.Write(header); err != nil {
 			return err
 		}
+
+		for _, e := range employees {
+			record := []string{
+				strconv.FormatInt(e.ID, 10),
+				e.Name,
+				strconv.Itoa(e.Age),
+				e.Position,
+				strconv.FormatInt(e.DepartmentID, 10),
+				e.Salary.String(),
+				e.CreatedAt.Format(time.RFC3339),
+				e.UpdatedAt.Format(time.RFC3339),
+			}
+			if err := w.Write(record); err != nil {
+				return err
+			}
+		}
+		w.Flush()
+		return w.Error()
+	})
+}
+
+// writeFileAtomic writes into a temp file in dir and renames it onto path
+// once fully written. Concurrent exports (e.g. overlapping POST
+// /employees/export calls) would otherwise both os.Create the same path and
+// interleave/truncate each other's writes; rename(2) within the same
+// filesystem is atomic, so readers and other writers only ever see a
+// complete old or new file, never a half-written one.
+func writeFileAtomic(dir, path string, write func(*os.File) error) (err error) {
+	tmp, err := os.CreateTemp(dir, ".export-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	return w.Error()
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	if err = write(tmp); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -29,12 +30,17 @@ func BasicAuth(users map[string]string) Middleware {
 	}
 }
 
+// validCredentials always hashes and compares, even for an unknown username,
+// so response time doesn't leak which usernames exist or how long a
+// password is (see review comment on this function).
 func validCredentials(users map[string]string, username, password string) bool {
 	expected, exists := users[username]
-	if !exists {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(password)) == 1
+
+	got := sha256.Sum256([]byte(password))
+	want := sha256.Sum256([]byte(expected))
+	match := subtle.ConstantTimeCompare(got[:], want[:]) == 1
+
+	return match && exists
 }
 
 func unauthorized(w http.ResponseWriter) {
