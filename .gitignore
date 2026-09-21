@@ -1,0 +1,3 @@
+/exports/*.json
+/exports/*.csv
+.env
